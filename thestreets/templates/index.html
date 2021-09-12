@@ -1,0 +1,157 @@
+<html lang="en">
+
+<head>
+    <title>The Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js" crossorigin=""></script>
+    <script src="https://unpkg.com/leaflet-providers@1.0.13/leaflet-providers.js" crossorigin=""></script>
+</head>
+
+<body>
+    <!-- Отображение карты и текущих координат -->
+    <div id="mapid" style="height:600px"></div>
+    <div id="centerid">Center:</div>
+    <span>Show from rate: </span><input id="rate" name="rate" value="1" onKeyPress='ratechange();'></input>
+    <script>
+        /*
+        * Виджет карты
+        */
+        var mymap = L.map('mapid',
+            { 'tap': false })
+            .setView([59.95184617254149, 30.30683755874634], 13);
+
+        /*
+        * Слой карты с домами, улицами и т.п.
+        */
+        var OpenStreetMap_Mapnik = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        }).addTo(mymap);
+
+        /*
+        * Слой карты с комментариями
+        * Этот слой будут наполнять пользователи
+        */
+        var got = {};
+        var layer = L.geoJSON(null, {
+            "onEachFeature": function (feature, layer) {
+                got[feature['_id']] = true;
+                if (feature.properties && feature.properties.comment) {
+                    var description = feature.properties.comment;
+                    if (feature.properties.rate) {
+                        description = description + '; rate ' + feature.properties.rate
+                    }
+                    var popup = layer.bindPopup(description);
+                }
+            },
+            "filter": function (feature) {
+                /* Филтьруем элементы, которые уже были отображены на карте */
+                return got[feature['_id']] != true;
+            }
+        }).addTo(mymap);
+
+        /*
+        * Диалог для комметария
+        */
+        function onMapClick(e) {
+            var response = window.prompt('What do you think about this place?', 'not bad');
+            if (response != null) {
+                var rate = window.prompt('Rate place from 1 (worst) to 5 (best)', '5');
+                if (rate == null)
+                    rate = 5
+
+                var p = mymap.project(e.latlng, 1);
+
+                var data = {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [p.x, p.y]
+                    },
+                    "properties": {
+                        "comment": response,
+                        "rate": Number(rate)
+                    }
+                }
+
+                fetch("/newplace", {
+                    method: "POST",
+                    body: JSON.stringify(data)
+                }).then(function (res) {
+                    res.json().then(function (data) {
+                        var l = mymap.unproject(L.point(data['geometry']['coordinates'][0], data['geometry']['coordinates'][1]), 1);
+                        data['geometry']['coordinates'][0] = l.lng;
+                        data['geometry']['coordinates'][1] = l.lat;
+
+                        layer.addData(data);
+                    })
+                });
+            }
+        }
+
+        mymap.on('click', onMapClick);
+
+        /*
+        * Загрузка комметариев с сервера, расположенных поблизости от текущих
+        * координат
+        */
+        function getPlaces() {
+            var request = {};
+            var p = mymap.project(mymap.getCenter(), 1);
+            var options = {
+                "x": p.x,
+                "y": p.y,
+            };
+
+            options['rate'] = document.getElementById("rate").value;
+
+            fetch("/places?" + new URLSearchParams(options))
+                .then(function (res) {
+                    res.json().then(function (dataarray) {
+                        dataarray.forEach(function (data) {
+                            var l = mymap.unproject(L.point(data['geometry']['coordinates'][0], data['geometry']['coordinates'][1]), 1);
+                            data['geometry']['coordinates'][0] = l.lng;
+                            data['geometry']['coordinates'][1] = l.lat;
+
+                            layer.addData(data);
+                        });
+                    })
+                });
+        }
+
+        /*
+        * Загружаем комметарии при навигации по карте
+        */
+        var timerId = null
+        function onMapMove(e) {
+            document.getElementById("centerid").innerHTML = "Center: " + mymap.getCenter();
+
+            if (timerId == null) {
+                timerId = setTimeout(function () {
+                    getPlaces();
+                    timerId = null
+                }, 1000);
+            }
+        };
+
+        mymap.on('move', onMapMove);
+
+        document.getElementById("centerid").innerHTML = "Center: " + mymap.getCenter();
+        timerId = setTimeout(function () {
+            getPlaces();
+            timerId = null
+        }, 1000);
+
+        function ratechange() {
+            got = {};
+            layer.clearLayers();
+
+            timerId = setTimeout(function () {
+                getPlaces();
+                timerId = null
+            }, 1000);
+        }
+    </script>
+</body>
+
+</html>
